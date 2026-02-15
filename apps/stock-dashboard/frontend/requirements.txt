@@ -1,0 +1,6 @@
+# frontend/requirements.txt
+Jinja2==3.1.6
+shiny==0.7.0
+pandas==2.1.4
+plotly==5.18.0
+requests==2.31.0
