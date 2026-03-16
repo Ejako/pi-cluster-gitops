@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: paper-trader
+  namespace: dividend-dashboard
+spec:
+  schedule: "0 17 * * 1-5"   # 17:00 UTC, weekdays only (after US market close 16:00 EST)
+  timeZone: "UTC"
+
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 5   # keep a week of daily runs
+  failedJobsHistoryLimit: 3
+
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 1800   # 30-min cap; paper trader should complete in < 5 min
+      template:
+        spec:
+          # Pin to master so both DB files are local NFS (no double-hop latency)
+          nodeSelector:
+            kubernetes.io/hostname: rpi5-master
+          containers:
+            - name: paper-trader
+              image: localhost:5000/dividend-dashboard:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - python
+                - scripts/paper_trader.py
+                - --sp500-db
+                - /data/sp500.db
+                - --paper-db
+                - /paper/paper_trade.db
+              env:
+                - name: DB_PATH
+                  value: /data/sp500.db
+                - name: PAPER_DB_PATH
+                  value: /paper/paper_trade.db
+                - name: SQLITE_WAL
+                  value: "1"
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "750m"
+              volumeMounts:
+                - name: db-storage
+                  mountPath: /data
+                - name: paper-db-storage
+                  mountPath: /paper
+          restartPolicy: OnFailure
+          volumes:
+            - name: db-storage
+              persistentVolumeClaim:
+                claimName: dividend-db-pvc
+            - name: paper-db-storage
+              persistentVolumeClaim:
+                claimName: paper-db-pvc

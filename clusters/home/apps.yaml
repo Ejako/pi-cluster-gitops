@@ -11,7 +11,12 @@ spec:
   path: ./apps
   prune: true
   wait: true
-  # SOPS decryption configuration
+  # SOPS decryption — Flux uses the age private key stored in the sops-age
+  # Kubernetes secret to decrypt any *.enc.yaml files before applying them.
+  # Create the secret once with:
+  #   kubectl create secret generic sops-age \
+  #     --namespace=flux-system \
+  #     --from-file=age.agekey=$HOME/age.key
   decryption:
     provider: sops
     secretRef:

@@ -1,0 +1,54 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: data-updater
+  namespace: dividend-dashboard
+spec:
+  schedule: "0 6 * * *"       # 06:00 UTC daily (before EU market open)
+  timeZone: "UTC"
+
+  # Prevent a second run starting if the previous one is still in progress.
+  # A full 843-ticker download takes ~8 min; this guards against overlap.
+  concurrencyPolicy: Forbid
+
+  # If the cluster was down at 06:00, don't start late jobs older than 2 h.
+  startingDeadlineSeconds: 7200
+
+  # Keep the last 3 successful and 2 failed job logs for debugging.
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 2
+
+  jobTemplate:
+    spec:
+      # Give up after 2 hours (network hung, rate-limited, etc.)
+      activeDeadlineSeconds: 7200
+      template:
+        spec:
+          # Pin to master node so the NFS export path is local (avoids double-NFS hop)
+          nodeSelector:
+            kubernetes.io/hostname: rpi5-master
+          containers:
+            - name: data-updater
+              image: localhost:5000/dividend-dashboard:latest
+              imagePullPolicy: IfNotPresent
+              command: ["python", "scripts/data_updater.py"]
+              env:
+                - name: DB_PATH
+                  value: /data/sp500.db
+                - name: SQLITE_WAL
+                  value: "1"
+              resources:
+                requests:
+                  memory: "512Mi"   # pandas + yfinance peak for 843 tickers
+                  cpu: "500m"
+                limits:
+                  memory: "1Gi"    # headroom for large DataFrame operations
+                  cpu: "1500m"
+              volumeMounts:
+                - name: db-storage
+                  mountPath: /data
+          restartPolicy: OnFailure
+          volumes:
+            - name: db-storage
+              persistentVolumeClaim:
+                claimName: dividend-db-pvc

@@ -1,0 +1,79 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared NFS storage for the RPi5 3-node cluster
+#
+# WHY NFS instead of hostPath:
+#   hostPath only serves the node it lives on.  With pod anti-affinity spreading
+#   the two app replicas across worker1 and worker2, those pods would get an
+#   empty /data directory and crash.  NFS exports the same directory to every
+#   node simultaneously.
+#
+# One-time NFS setup on rpi5-master (or use: make nfs-setup in the app repo):
+#   sudo apt install nfs-kernel-server
+#   sudo mkdir -p /data/dividend-db /data/paper-db
+#   sudo chown 1000:1000 /data/dividend-db /data/paper-db
+#   printf "/data/dividend-db *(rw,sync,no_subtree_check,no_root_squash)\n\
+# /data/paper-db    *(rw,sync,no_subtree_check,no_root_squash)\n" \
+#     | sudo tee -a /etc/exports
+#   sudo exportfs -ra && sudo systemctl enable --now nfs-server
+#
+# BEFORE DEPLOYING: replace NFS_SERVER_IP with rpi5-master's LAN IP.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── S&P 500 database PV / PVC ─────────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: dividend-db-pv
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteMany          # NFS supports RWX; hostPath does NOT
+  storageClassName: nfs-storage
+  persistentVolumeReclaimPolicy: Retain
+  nfs:
+    server: NFS_SERVER_IP    # ← replace with master node LAN IP (e.g. 192.168.1.10)
+    path: /data/dividend-db
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dividend-db-pvc
+  namespace: dividend-dashboard
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-storage
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# ── Paper trade database PV / PVC ─────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: paper-db-pv
+spec:
+  capacity:
+    storage: 500Mi
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-storage
+  persistentVolumeReclaimPolicy: Retain
+  nfs:
+    server: NFS_SERVER_IP    # ← replace with master node LAN IP
+    path: /data/paper-db
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: paper-db-pvc
+  namespace: dividend-dashboard
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-storage
+  resources:
+    requests:
+      storage: 500Mi

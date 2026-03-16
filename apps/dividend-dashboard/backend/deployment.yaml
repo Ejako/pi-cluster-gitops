@@ -1,0 +1,117 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dividend-dashboard
+  namespace: dividend-dashboard
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: dividend-dashboard
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0       # zero-downtime rolling updates
+  template:
+    metadata:
+      labels:
+        app: dividend-dashboard
+    spec:
+      # Spread the two replicas across different RPi5 nodes for resilience
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - dividend-dashboard
+                topologyKey: kubernetes.io/hostname
+
+      # Allow scheduling on the master node if needed
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+
+      containers:
+        - name: dividend-dashboard
+          image: localhost:5000/dividend-dashboard:latest
+          # IfNotPresent avoids a registry round-trip on every pod restart,
+          # which matters on RPi5 with slow SD card / NFS I/O.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+
+          env:
+            - name: DB_PATH
+              value: /data/sp500.db
+            - name: PAPER_DB_PATH
+              value: /paper/paper_trade.db
+            - name: SHINY_HOST
+              value: "0.0.0.0"
+            - name: SHINY_PORT
+              value: "8080"
+            # Enable SQLite WAL mode so both app pods can read concurrently
+            # without blocking each other or the CronJob writers.
+            - name: SQLITE_WAL
+              value: "1"
+
+          resources:
+            requests:
+              # RPi5 has 4 cores / 8 GB per node; leave headroom for OS + k3s (~800 Mi)
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1500m"   # 1.5 of 4 cores — generous for a Shiny UI process
+
+          volumeMounts:
+            - name: db-storage
+              mountPath: /data
+            - name: paper-db-storage
+              mountPath: /paper
+
+          # startupProbe gives the app up to 2 min to cold-start (first import of
+          # numpy/pandas/matplotlib can be slow on ARM64).
+          startupProbe:
+            httpGet:
+              path: /
+              port: 8080
+            failureThreshold: 12   # 12 × 10 s = 2 min budget
+            periodSeconds: 10
+
+          # Once started, check readiness every 10 s
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Only restart if totally unresponsive for 90 s (3 × 30 s)
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 0
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+      volumes:
+        - name: db-storage
+          persistentVolumeClaim:
+            claimName: dividend-db-pvc
+        - name: paper-db-storage
+          persistentVolumeClaim:
+            claimName: paper-db-pvc
